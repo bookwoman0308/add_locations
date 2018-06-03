@@ -1,0 +1,4 @@
+name = MyModule Add Locations
+description = enables automatic addition of locations to taxonomy and automatic creation of location nodes
+core = 7.x
+package = mymodule

@@ -1,0 +1,318 @@
+<?php
+
+/**
+ * Implements hook_help().
+ */
+function mymodule_add_locations_help($path, $arg) {
+
+  switch ($path) {
+  case "admin/help#mymodule_add_locations":
+    return '<p>' . t("Automatically adds new national or subnational profiles as well as locations to taxonomy.");
+    break;
+  }
+}
+
+/**
+ * Implements hook_menu() to create page.
+ */
+function mymodule_add_locations_menu() {
+
+  $items = array();
+  $items['add-profiles'] = array(
+           'title' => 'Add Taxonomy Locations and Profile Nodes',
+           'page callback' => 'mymodule_add_locations_show_form',
+           'access arguments' => array('access content'),
+         );
+   return $items;
+}
+
+/**
+ * Passes the call to display the form.
+ */
+function mymodule_add_locations_show_form () {
+
+  $form_var = drupal_get_form('mymodule_add_locations_create_form');
+
+  return $form_var;
+}
+  
+/**
+ * Implements hook_form(). It displays a success message below the initial form.
+ */
+function mymodule_add_locations_create_form($form = array(), &$form_state) {
+
+  $form = array();
+  $initial_title = '<div>Click on the button to start the script that creates the profiles and adds locations to the taxonomy.</div>';
+  $form['profile_fieldset'] = array(
+    '#type' => 'fieldset',
+  ); 
+  $form['initial_title'] = array(
+             '#title' => $initial_title,
+             '#type' => 'fieldset',
+             );
+  $form['profile_submit'] = array(
+    '#type' => 'submit',
+    '#value' => t('Go'),
+    '#attributes' => array(
+       'class' => array(
+          'profile-show'
+          ),
+       ),
+  ); 
+
+  //Add css styling to the table
+  $path = drupal_get_path('module', 'mymodule_add_locations');
+  $form['#attached'] = array(
+     'css' => array(
+         'type' => 'file',
+         'data' => $path . '/css/styles.css',
+         ),
+     );
+
+  $org_internal_rid = user_role_load_by_name('org_internal')->rid;
+  $org_internal = user_has_role($org_internal_rid);
+
+  //If the user has clicked submit and has permissions
+  if(!empty($form_state['profiles']) && $org_internal) {
+     
+     $profile_list = $form_state['profiles'];
+     $result_title = '<div>You successfully added ' . count($profile_list) . ' profiles.</div>';
+     $form['results_rendered_title'] = array(
+             '#title' => $result_title,
+             '#type' => 'fieldset',
+             );
+  }
+
+  //User does not have access permission
+  if(!empty($form_state['profiles']) && !$org_internal) {
+
+    $form['results_rendered'] = array(
+             '#title' => 'You are not authorized to view the results',
+             '#type' => 'fieldset',
+             );
+  }
+   
+  return $form;
+}
+
+/**
+ * Implements hook_form_validate().
+ */
+function mymodule_add_locations_create_form_validate($form, &$form_state) {
+   //TODO: add validation if necessary
+}
+
+/**
+ * Implements hook_form_submit().
+ * Adds new locations to the taxonomy and creates new nodes that will be rendered with the mymodule_country_profile code.
+ * The profiles cannot be created without the additional custom module and a lot of UI customizations, including the use of Display Suite.
+ * There is no return value, but the function stores the assembled $add_array in the $form_state.
+ */
+function mymodule_add_locations_create_form_submit($form, &$form_state) {
+
+  //To enable querying an external db to retrieve the subnational locations
+  module_load_include('inc', 'mymodule_add_locations', 'inc/location_query');
+
+  $form_state['rebuild'] = TRUE;  //this allows for displaying results directly under the initial form once the user clicks submit
+
+  //Create an array that will store all the new subnational locations that need to be added. Use version 250 for the 2016 list of countries.
+  $shared_locs = _get_shared_loc(250);
+
+  //Retrieve the necessary taxonomy information
+  $tax_name = 'geography';
+  $my_voc = taxonomy_vocabulary_machine_name_load($tax_name);
+  $vid = $my_voc->vid;
+
+  //Initialize two empty arrays that will be used to track which locations need to be added to the taxonomy and which need profiles created
+  $add_tax_array = array();
+  $add_profile_array = array();
+
+  //Create an array that will store the subnational location name and its parent's location name
+  $parent_name_array = get_shared_parents(300);
+
+  //Create an array that will store the parent's location id and name. This was hardcoded for time and because there are so few and to reduce db time.
+  $parent_id_array = get_parent_ids();
+
+  $parent_tid_array = array();
+
+  //Gather all existing nodes from the healthdata db that have a country profile and store in an array to be used to check against
+  $all_profiles = array();
+
+  $query_profile = "SELECT n.nid, n.title
+            FROM {node} as n
+            WHERE n.type = 'profile'";
+
+  $result_profile = db_query($query_profile);
+
+  foreach($result_profile as $row) {
+    $all_profiles[] = $row->title;
+  }
+
+  //   Array
+  // (
+  //     [0] => Germany
+  //     [1] => Andorra
+  //     [2] => Ireland
+  //     etc.
+
+  //For each new subnational location, check to see if it is in the taxonomy already. If not, store it in an array with the necessary values.
+  //For each new subnational location, check to see if it already has a profile created. If not, store in an array with the necessary values.
+  //Make sure to use $shared_locs_us array instead of the gbd one for the US state profile launch.
+  foreach ($shared_locs_us as $key => $value) {
+    if (array_key_exists($value, $parent_name_array)) {
+      $parent_key = $parent_name_array[$value];
+      $parent_country = $parent_id_array[$parent_key];
+      //Yes this could be better below, will rewrite when I have more time.
+      if ($parent_country == 'Mexico') {
+        $parent_tid_array[0] = 16001;
+        $parent_tid = 16001;
+      } 
+      if ($parent_country == 'Japan') {    
+        $parent_tid_array[0] = 16002;
+        $parent_tid = 16002;
+      }
+      if ($parent_country == 'United Kingdom') {
+        $parent_tid_array[0] = 16003;
+        $parent_tid = 16003;
+      }
+      if ($parent_country == 'Sweden') {
+        $parent_tid_array[0] = 16004;
+        $parent_tid = 16004;
+      }
+      if ($parent_country == 'United States') {
+        $parent_tid_array[0] = 16006;
+        $parent_tid = 16006;
+      }
+    }
+    $long_name = $parent_country . ' - ' . $value;
+    if(!taxonomy_get_term_by_name($value, $tax_name)) {
+      $add_tax_array[] = array(
+                  'child_name' => $value,
+                  'parents' => $parent_tid_array,
+                  'parent_tid' => $parent_tid,
+                 );
+    }
+    if(!in_array($long_name, $all_profiles)) {
+      $add_profile_array[] = array(
+                  'name' => $long_name,
+                  'child_name' => $value,
+                  'parents' => $parent_tid_array,
+                  'parent_tid' => $parent_tid,
+                  'shared_id' => $key,
+                 );
+    }
+  }
+
+  //The final array will look like this for each location for the $add_profile_array:
+  //   Array
+  // (
+  //     [0] => Array
+  //         (
+  //             [name] => United States - Alaska
+  //             [child_name] => Alaska
+  //             [parents] => Array
+  //                 (
+  //                     [0] => 16006
+  //                 )
+  //             [parent_tid] => 16006
+  //             [shared_id] => 500
+  //         )
+  // )
+
+  //Next add the new locations to the taxonomy if they are not already found in it. Check for parent tid because if null this will crash.
+  if ($add_tax_array[0]['parent_tid']) {
+    mymodule_add_profiles_add_to_taxonomy($vid, $add_tax_array);
+  } 
+  
+  //Finally, add the new nodes for the locations not already in the database
+  if(!empty($add_profile_array)) {
+    mymodule_add_profiles_add_loc_nodes($add_profile_array);
+  }
+  
+  //Store the array keys to be used for a count
+  $form_state['profiles'] = array_keys($add_profile_array);
+
+  return;
+}
+
+
+/**
+  * Original function to add the new locations to the taxonomy.
+  * What is needed: the taxonomy $vid and $add_array, which contains all of the locations and metadata.
+  * Returns nothing.
+  */
+function mymodule_add_locations_add_to_taxonomy($vid, $add_array) {
+  //Add to taxonomy if not already in it and include the correct parent using the format required by Drupal
+  $add_array = $this->getAddTaxArray();
+  foreach ($add_array as $addition) {
+    $geo_term = new stdClass();
+    $geo_term->name = $addition['name'];
+    $geo_term->vid = $this->getVid();
+    $geo_term->parents = $addition['parents'];
+    taxonomy_term_save($geo_term);
+
+    //To give the taxonomy term a parent:
+    $parent_term_id = db_insert('taxonomy_term_hierarchy')
+      ->fields(array(
+            'tid' => $geo_term->tid,
+            'parent' => $addition['parent_tid'],
+      ))
+      ->execute();
+    }
+}
+
+/**
+ * Original function to add the new location nodes to the Drupal db.
+ * A different module will render the node to display the content on www.healthdata.org/[location_name]
+ * Input: $all_profiles, the array of all existing location nodes, and $add_array, which contains all of the new locations and metadata.
+ * Output: none. A new node is created with all correct fields and values according to the country profile content type.
+ */
+function mymodule_add_locations_add_loc_nodes($add_array, $all_profiles) {
+
+  global $user;
+
+  //Check to see if there is already a node for each subnational location in the healthdata db. If not, create one
+  foreach($add_array as $index) {
+    if (in_array($index['name'], $all_profiles)) {
+      //already in - don't do anything
+    }
+    else {   //make the node! Use dpm to view an existing node to see what values are needed
+      $node = new stdClass();
+      $node->title = $index['name'];
+      $node->type = "profile";
+      node_object_prepare($node); // Sets some defaults. Invokes hook_prepare() and hook_node_prepare().
+      $node->language = LANGUAGE_NONE; // Or e.g. 'en' if locale is enabled
+      $node->uid = $user->uid; 
+      $node->status = 1; //(1 or 0): published or not
+      $node->promote = 0; //(1 or 0): promoted to front page
+      $node->body = array();
+      $node->field_profile_type[$node->language][0]['target_id'] = 16300;  //always the same for a country profile
+      $node->field_profile_id[$node->language][0]['value'] = $index['shared_id'];  //location id from shared database
+      $new_geo_term = taxonomy_get_term_by_name($index['name']);
+      $new_geo_tid = current($new_geo_term)->tid;
+      $node->field_geography[$node->language][0]['target_id'] = $new_geo_tid;  //tid of newly created geography
+
+      //Add related journal papers
+      $node->field_related_documents[$node->language][2]['target_id'] = 5000;
+      $node->field_related_documents[$node->language][3]['target_id'] = 5001;
+      $node->field_related_documents[$node->language][4]['target_id'] = 5002;
+
+      //Add empty array for related event field
+      $node->field_related_event = array();
+
+      //Add search bump and boost so that location term will show up higher in search results page.
+      $node->field_search_boost[$node->language][0] = array('value' => $index['name'], 'format' => '', 'safe_value' => $index['name']);
+      $node->field_search_boost[$node->language][1] = array('value' => $index['name'], 'format' => '', 'safe_value' => $index['name']);
+      $node->field_search_boost[$node->language][2] = array('value' => $index['name'], 'format' => '', 'safe_value' => $index['name']);
+      $node->field_search_bump[$node->language][0] = array('value' => $index['name'], 'format' => '', 'safe_value' => $index['name']);
+      $node->field_search_bump[$node->language][1] = array('value' => $index['name'], 'format' => '', 'safe_value' => $index['name']);
+      $node->field_search_bump[$node->language][2] = array('value' => $index['name'], 'format' => '', 'safe_value' => $index['name']);
+      $node->path['pathauto'] = 1;
+
+      $node = node_submit($node); // Prepare node for saving
+      node_save($node);
+
+    }
+  }
+
+}
